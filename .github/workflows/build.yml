@@ -14,7 +14,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential bc bison flex libssl-dev libelf-dev \
-            zip unzip curl tar git cpio rsync patch
+            zip unzip curl tar git cpio rsync patch dwarves pahole
 
       - name: Setup AOSP Clang (r510928)
         run: |
