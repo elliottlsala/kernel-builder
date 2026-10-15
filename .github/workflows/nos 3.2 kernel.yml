@@ -1,0 +1,135 @@
+name: Build NOS 3.2 Ghost Kernel (Nothing MT6878)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Kernel & AnyKernel3 Zip
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            zip unzip curl tar git cpio rsync patch dwarves pahole
+
+      - name: Setup AOSP Clang (r510928)
+        run: |
+          mkdir -p $HOME/toolchains/clang
+          curl -Lf --progress-bar "https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r510928.tar.gz" | tar -xz -C $HOME/toolchains/clang
+          echo "$HOME/toolchains/clang/bin" >> $GITHUB_PATH
+
+      - name: Clone Kernel Source
+        run: |
+          git clone --depth=1 -b mt6878/Galaga/v https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878.git kernel
+
+      - name: Apply kABI Patch
+        run: |
+          cd kernel
+          curl -sLf "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch" | patch -p1
+
+      - name: Setup KernelSU-Next
+        run: |
+          cd kernel
+          # Setup KernelSU-Next (Latest Release)
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+
+      - name: Fix libbpf.c Compiler Error
+        run: |
+          cd kernel
+          sed -i "s/next_path = strchr(s, ':');/next_path = (char *)strchr(s, ':');/g" tools/lib/bpf/libbpf.c
+
+      - name: Create custom.config
+        run: |
+          cd kernel
+          cat << 'EOF' > arch/arm64/configs/custom.config
+          # KernelSU-Next
+          CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+
+          # Custom Name (no -dirty, no +)
+          CONFIG_LOCALVERSION_AUTO=n
+          CONFIG_LOCALVERSION="-ghost-kernel"
+
+          # Droidspaces Core (GKI kABI-safe)
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_PID_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_OVERLAY_FS=y
+
+          # Networking & Container Isolation
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_USER_NS=y
+
+          # Filesystems (NixOS / ACL support)
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_TMPFS_XATTR=y
+
+          # Firewall support (UFW & Fail2ban inside containers)
+          CONFIG_NETFILTER_XT_TARGET_REJECT=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_NETFILTER_XT_SET=y
+          EOF
+
+      - name: Compile Kernel
+        run: |
+          cd kernel
+          export ARCH=arm64
+          export KBUILD_BUILD_USER="@zhshadow"
+          export KBUILD_BUILD_HOST="ghost-nation"
+          export LOCALVERSION=""
+
+          # Generate merged config
+          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 HOSTCC=clang HOSTCXX=clang++ gki_defconfig custom.config
+
+          # Compile Image
+          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 HOSTCC=clang HOSTCXX=clang++ Image
+
+      - name: Package with AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
+
+          cat << 'EOF' > ak3/anykernel.sh
+          ### AnyKernel3 Script
+          properties() { '
+          kernel.string=Ghost Kernel 6.1 for Nothing OS 3.2
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          '; }
+
+          BLOCK=boot;
+          IS_SLOT_DEVICE=auto;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          split_boot;
+          flash_boot;
+          EOF
+
+          # Copy Image and pack zip
+          cp kernel/out/arch/arm64/boot/Image ak3/Image
+          cd ak3
+          zip -r9 ../AnyKernel3-Ghost-6.1-NOS-3.2.zip * -x .git .github README.md *placeholder
+          cd ..
+
+      - name: Upload Flashable AnyKernel3 Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnyKernel3-Ghost-6.1-NOS-3.2
+          path: AnyKernel3-Ghost-6.1-NOS-3.2.zip
