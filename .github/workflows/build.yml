@@ -34,8 +34,8 @@ jobs:
       - name: Setup KernelSU-Next
         run: |
           cd kernel
-          # Pin to v3.4.0 (stable on Android 16)
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s v3.4.0
+          # Get the latest ksu next
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
       - name: Fix libbpf.c Compiler Error
         run: |
